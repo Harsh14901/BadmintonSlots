@@ -80,11 +80,23 @@ def test_bst_time_conversion():
     assert "12:00" not in output
 
 
-def test_bookable_from_shown_for_new():
+def test_bookable_from_shown_in_header():
     change = _change("new", bookable_from="2099-01-01T00:00:00Z")
     output = format_console([change])
-    assert "⏳" in output
     assert "bookable from" in output
+    header_line = [l for l in output.split("\n") if "📅" in l][0]
+    assert "bookable from" in header_line
+
+
+def test_bookable_from_per_line_when_mixed():
+    changes = [
+        _change("new", bookable_from="2099-01-01T00:00:00Z"),
+        _change("new", start="2026-03-28T11:00:00Z", end="2026-03-28T11:39:59Z", bookable_from=""),
+    ]
+    output = format_console(changes)
+    header_line = [l for l in output.split("\n") if "📅" in l][0]
+    assert "bookable from" not in header_line
+    assert "⏳" in output
 
 
 def test_telegram_escapes_special():
