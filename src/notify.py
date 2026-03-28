@@ -1,4 +1,6 @@
+import re
 from datetime import datetime, timezone
+from itertools import groupby
 
 import httpx
 
@@ -9,6 +11,26 @@ from src.tz import parse_utc, to_local
 
 CHANGE_EMOJI = {"new": "🟢", "gone": "🔴", "bookable": "🟡"}
 CHANGE_LABEL = {"new": "NEW", "gone": "GONE", "bookable": "NOW BOOKABLE"}
+
+_COURT_RE = re.compile(r"^(.+?Court\s*)\d+$")
+
+
+def _coalesce_locations(locations: list[str]) -> str:
+    if len(locations) == 1:
+        return locations[0]
+    m = _COURT_RE.match(locations[0])
+    if not m:
+        return ", ".join(locations)
+    prefix = m.group(1)
+    numbers: list[str] = []
+    for loc in locations:
+        m = _COURT_RE.match(loc)
+        if m and m.group(1) == prefix:
+            numbers.append(loc[len(prefix):])
+        else:
+            return ", ".join(locations)
+    numbers.sort(key=lambda n: int(n))
+    return f"{prefix}{', '.join(numbers)}"
 
 
 def _bookable_suffix(slot: Slot, *, escape_md: bool = False) -> str:
@@ -25,13 +47,20 @@ def _bookable_suffix(slot: Slot, *, escape_md: bool = False) -> str:
     return f"  ⏳ bookable from {label}"
 
 
-def format_slot_line(slot: Slot) -> str:
-    start_local = to_local(parse_utc(slot.start_time))
-    end_local = to_local(parse_utc(slot.end_time))
-    start = start_local.strftime("%H:%M")
-    end = end_local.strftime("%H:%M")
-    suffix = _bookable_suffix(slot)
-    return f"    {start}–{end}  {slot.activity_name:<20s} {slot.location}{suffix}"
+def _slot_sort_key(slot: Slot) -> tuple:
+    return (slot.start_time, slot.end_time, slot.activity_name)
+
+
+def _coalesce_slots(slots: list[Slot]) -> list[tuple[Slot, str]]:
+    """Groups slots sharing the same time+activity, returns (representative_slot, merged_location)."""
+    sorted_slots = sorted(slots, key=_slot_sort_key)
+    result: list[tuple[Slot, str]] = []
+    for _, group in groupby(sorted_slots, key=_slot_sort_key):
+        group_list = list(group)
+        locations = [s.location for s in group_list]
+        merged = _coalesce_locations(locations)
+        result.append((group_list[0], merged))
+    return result
 
 
 def format_slot_list(slots: list[Slot]) -> str:
@@ -52,8 +81,13 @@ def format_slot_list(slots: list[Slot]) -> str:
         day_label = dt.strftime("%A %d %b")
         lines.append(f"\n  📅 {day_label} — {site_name}")
         lines.append(f"  {'─' * 70}")
-        for s in sorted(grouped[key], key=lambda x: x.start_time):
-            lines.append(format_slot_line(s))
+        for slot, location in _coalesce_slots(grouped[key]):
+            start_local = to_local(parse_utc(slot.start_time))
+            end_local = to_local(parse_utc(slot.end_time))
+            start = start_local.strftime("%H:%M")
+            end = end_local.strftime("%H:%M")
+            suffix = _bookable_suffix(slot)
+            lines.append(f"    {start}–{end}  {slot.activity_name:<20s} {location}{suffix}")
 
     return "\n".join(lines)
 
@@ -75,37 +109,34 @@ def format_slot_list_telegram(slots: list[Slot]) -> str:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
         day_label = dt.strftime("%A %d %b")
         lines.append(f"📅 *{_escape_markdown(day_label)} — {_escape_markdown(site_name)}*")
-        for s in sorted(grouped[key], key=lambda x: x.start_time):
-            start_local = to_local(parse_utc(s.start_time))
-            end_local = to_local(parse_utc(s.end_time))
+        for slot, location in _coalesce_slots(grouped[key]):
+            start_local = to_local(parse_utc(slot.start_time))
+            end_local = to_local(parse_utc(slot.end_time))
             start = start_local.strftime("%H:%M")
             end = end_local.strftime("%H:%M")
-            activity = _escape_markdown(s.activity_name)
-            location = _escape_markdown(s.location)
-            suffix = _bookable_suffix(s, escape_md=True)
-            lines.append(f"  • {start}–{end} \\| {activity} \\| {location}{suffix}")
+            activity = _escape_markdown(slot.activity_name)
+            loc_esc = _escape_markdown(location)
+            suffix = _bookable_suffix(slot, escape_md=True)
+            lines.append(f"  • {start}–{end} \\| {activity} \\| {loc_esc}{suffix}")
         lines.append("")
 
     return "\n".join(lines)
 
 
-def format_change_line(change: SlotChange, *, escape_md: bool = False) -> str:
+def _change_sort_key(change: SlotChange) -> tuple:
     s = change.slot
-    start_local = to_local(parse_utc(s.start_time))
-    end_local = to_local(parse_utc(s.end_time))
-    start = start_local.strftime("%H:%M")
-    end = end_local.strftime("%H:%M")
-    emoji = CHANGE_EMOJI[change.change_type]
-    label = CHANGE_LABEL[change.change_type]
+    return (s.start_time, s.end_time, s.activity_name, change.change_type)
 
-    if escape_md:
-        activity = _escape_markdown(s.activity_name)
-        location = _escape_markdown(s.location)
-        suffix = _bookable_suffix(s, escape_md=True)
-        return f"  {emoji} {label}: {start}–{end} \\| {activity} \\| {location}{suffix}"
 
-    suffix = _bookable_suffix(s)
-    return f"    {emoji} {label:<13s} {start}–{end}  {s.activity_name:<20s} {s.location}{suffix}"
+def _coalesce_changes(changes: list[SlotChange]) -> list[tuple[SlotChange, str]]:
+    sorted_changes = sorted(changes, key=_change_sort_key)
+    result: list[tuple[SlotChange, str]] = []
+    for _, group in groupby(sorted_changes, key=_change_sort_key):
+        group_list = list(group)
+        locations = [c.slot.location for c in group_list]
+        merged = _coalesce_locations(locations)
+        result.append((group_list[0], merged))
+    return result
 
 
 def _escape_markdown(text: str) -> str:
@@ -136,8 +167,16 @@ def format_console(changes: list[SlotChange]) -> str:
         day_label = dt.strftime("%A %d %b")
         lines.append(f"\n  📅 {day_label} — {site_name}")
         lines.append(f"  {'─' * 70}")
-        for c in sorted(grouped[key], key=lambda x: x.slot.start_time):
-            lines.append(format_change_line(c))
+        for change, location in _coalesce_changes(grouped[key]):
+            s = change.slot
+            start_local = to_local(parse_utc(s.start_time))
+            end_local = to_local(parse_utc(s.end_time))
+            start = start_local.strftime("%H:%M")
+            end = end_local.strftime("%H:%M")
+            emoji = CHANGE_EMOJI[change.change_type]
+            label = CHANGE_LABEL[change.change_type]
+            suffix = _bookable_suffix(s)
+            lines.append(f"    {emoji} {label:<13s} {start}–{end}  {s.activity_name:<20s} {location}{suffix}")
 
     return "\n".join(lines)
 
@@ -153,8 +192,18 @@ def format_telegram(changes: list[SlotChange]) -> str:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
         day_label = dt.strftime("%A %d %b")
         lines.append(f"📅 *{_escape_markdown(day_label)} — {_escape_markdown(site_name)}*")
-        for c in sorted(grouped[key], key=lambda x: x.slot.start_time):
-            lines.append(format_change_line(c, escape_md=True))
+        for change, location in _coalesce_changes(grouped[key]):
+            s = change.slot
+            start_local = to_local(parse_utc(s.start_time))
+            end_local = to_local(parse_utc(s.end_time))
+            start = start_local.strftime("%H:%M")
+            end = end_local.strftime("%H:%M")
+            emoji = CHANGE_EMOJI[change.change_type]
+            label = CHANGE_LABEL[change.change_type]
+            activity = _escape_markdown(s.activity_name)
+            loc_esc = _escape_markdown(location)
+            suffix = _bookable_suffix(s, escape_md=True)
+            lines.append(f"  {emoji} {label}: {start}–{end} \\| {activity} \\| {loc_esc}{suffix}")
         lines.append("")
 
     return "\n".join(lines)

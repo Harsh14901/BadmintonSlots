@@ -1,6 +1,11 @@
 from src.api import Slot
 from src.diff import SlotChange
-from src.notify import format_console, format_telegram
+from src.notify import (
+    _coalesce_locations,
+    format_console,
+    format_slot_list,
+    format_telegram,
+)
 
 
 def _slot(
@@ -87,3 +92,37 @@ def test_telegram_escapes_special():
     msg = format_telegram([change])
     assert "Court\\_1" in msg
     assert "\\(special\\)" in msg
+
+
+def test_coalesce_locations_single():
+    assert _coalesce_locations(["Poplar Baths Court 3"]) == "Poplar Baths Court 3"
+
+
+def test_coalesce_locations_multiple():
+    locs = ["Poplar Baths Court 3", "Poplar Baths Court 1", "Poplar Baths Court 4"]
+    assert _coalesce_locations(locs) == "Poplar Baths Court 1, 3, 4"
+
+
+def test_coalesce_locations_different_prefixes():
+    locs = ["Court A 1", "Other Court 2"]
+    assert _coalesce_locations(locs) == "Court A 1, Other Court 2"
+
+
+def test_coalesce_slots_in_list():
+    slots = [
+        _slot(location="John Orwell Court 3"),
+        _slot(location="John Orwell Court 1"),
+        _slot(location="John Orwell Court 4"),
+    ]
+    output = format_slot_list(slots)
+    assert "Court 1, 3, 4" in output
+
+
+def test_coalesce_changes_console():
+    changes = [
+        _change("new", location="John Orwell Court 4"),
+        _change("new", location="John Orwell Court 1"),
+        _change("new", location="John Orwell Court 3"),
+    ]
+    output = format_console(changes)
+    assert "Court 1, 3, 4" in output
