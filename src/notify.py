@@ -25,6 +25,39 @@ def _bookable_suffix(slot: Slot, *, escape_md: bool = False) -> str:
     return f"  ⏳ bookable from {label}"
 
 
+def format_slot_line(slot: Slot) -> str:
+    start_local = to_local(parse_utc(slot.start_time))
+    end_local = to_local(parse_utc(slot.end_time))
+    start = start_local.strftime("%H:%M")
+    end = end_local.strftime("%H:%M")
+    suffix = _bookable_suffix(slot)
+    return f"    {start}–{end}  {slot.activity_name:<20s} {slot.location}{suffix}"
+
+
+def format_slot_list(slots: list[Slot]) -> str:
+    if not slots:
+        return "\n  No matching slots found."
+
+    grouped: dict[str, list[Slot]] = {}
+    for slot in slots:
+        local_start = to_local(parse_utc(slot.start_time))
+        local_date = local_start.strftime("%Y-%m-%d")
+        key = f"{local_date}|{slot.site_name}"
+        grouped.setdefault(key, []).append(slot)
+
+    lines: list[str] = []
+    for key in sorted(grouped.keys()):
+        date_str, site_name = key.split("|", 1)
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        day_label = dt.strftime("%A %d %b")
+        lines.append(f"\n  📅 {day_label} — {site_name}")
+        lines.append(f"  {'─' * 70}")
+        for s in sorted(grouped[key], key=lambda x: x.start_time):
+            lines.append(format_slot_line(s))
+
+    return "\n".join(lines)
+
+
 def format_change_line(change: SlotChange, *, escape_md: bool = False) -> str:
     s = change.slot
     start_local = to_local(parse_utc(s.start_time))

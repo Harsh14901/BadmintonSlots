@@ -9,7 +9,7 @@ from src.api import fetch_available_slots
 from src.db import SlotDB
 from src.diff import compute_changes
 from src.filters import matches_rules
-from src.notify import format_console, format_telegram, send_telegram
+from src.notify import format_console, format_slot_list, format_telegram, send_telegram
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -17,12 +17,7 @@ DB_PATH = PROJECT_ROOT / "slots.db"
 
 
 def do_check() -> None:
-    config_path = PROJECT_ROOT / "config.json"
-    if not config_path.exists():
-        print(f"Config not found: {config_path}")
-        sys.exit(1)
-
-    config = json.loads(config_path.read_text())
+    config = _load_config()
     rules = config.get("rules", [])
     telegram = config["telegram"]
 
@@ -73,6 +68,32 @@ def do_check() -> None:
         db.close()
 
 
+def _load_config() -> dict:
+    config_path = PROJECT_ROOT / "config.json"
+    if not config_path.exists():
+        print(f"Config not found: {config_path}")
+        sys.exit(1)
+    return json.loads(config_path.read_text())
+
+
+def do_list() -> None:
+    config = _load_config()
+    rules = config.get("rules", [])
+
+    print("Obtaining JWT...")
+    jwt = get_jwt()
+
+    print("Fetching available slots...")
+    all_slots = fetch_available_slots(jwt, config)
+    print(f"  Found {len(all_slots)} available slots total")
+
+    matching = [s for s in all_slots if matches_rules(s, rules)]
+    print(f"  {len(matching)} match configured rules")
+
+    print("\n🏸 Available Badminton Slots:")
+    print(format_slot_list(matching))
+
+
 def do_cleanup(days: int) -> None:
     db = SlotDB(DB_PATH)
     try:
@@ -87,13 +108,16 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("check", help="Check for slot changes (default)")
+    sub.add_parser("list", help="Fetch and display current available slots")
 
     cleanup_p = sub.add_parser("cleanup", help="Remove old slots from database")
     cleanup_p.add_argument("days", type=int, help="Remove slots older than N days")
 
     args = parser.parse_args()
 
-    if args.command == "cleanup":
+    if args.command == "list":
+        do_list()
+    elif args.command == "cleanup":
         do_cleanup(args.days)
     else:
         do_check()
