@@ -4,68 +4,22 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from src.api import Slot, fetch_available_slots
 from src.auth import get_jwt
-from src.api import fetch_available_slots
 from src.db import SlotDB
-from src.diff import compute_changes
+from src.diff import SlotChange, compute_changes
 from src.filters import matches_rules
-from src.notify import format_console, format_slot_list, format_telegram, send_telegram
+from src.notify import (
+    format_console,
+    format_slot_list,
+    format_slot_list_telegram,
+    format_telegram,
+    send_telegram,
+)
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
 DB_PATH = PROJECT_ROOT / "slots.db"
-
-
-def do_check() -> None:
-    config = _load_config()
-    rules = config.get("rules", [])
-    telegram = config["telegram"]
-
-    print("Obtaining JWT...")
-    jwt = get_jwt()
-
-    print("Fetching available slots...")
-    all_slots = fetch_available_slots(jwt, config)
-    print(f"  Found {len(all_slots)} available slots total")
-
-    matching = [s for s in all_slots if matches_rules(s, rules)]
-    print(f"  {len(matching)} match configured rules")
-
-    now = datetime.now(timezone.utc)
-    date_from = now.strftime("%Y-%m-%d")
-    date_to = (now + timedelta(days=config["check_days"])).strftime("%Y-%m-%d")
-
-    db = SlotDB(DB_PATH)
-    try:
-        stored = db.get_slots_in_range(date_from, date_to)
-        changes = compute_changes(stored, matching)
-
-        new_count = sum(1 for c in changes if c.change_type == "new")
-        gone_count = sum(1 for c in changes if c.change_type == "gone")
-        bookable_count = sum(1 for c in changes if c.change_type == "bookable")
-        print(f"  Changes: {new_count} new, {gone_count} gone, {bookable_count} now bookable")
-
-        db.sync(matching, changes)
-
-        print("\n🏸 Badminton Slot Changes:")
-        print(format_console(changes))
-
-        if not changes:
-            return
-
-        if not telegram.get("bot_token") or not telegram.get("chat_id"):
-            print("\n⚠️  Telegram not configured — skipping notification")
-            return
-
-        message = format_telegram(changes)
-        print("\nSending Telegram notification...")
-        try:
-            send_telegram(message, telegram["bot_token"], telegram["chat_id"])
-            print("Done!")
-        except Exception as e:
-            print(f"⚠️  Telegram send failed: {e}")
-    finally:
-        db.close()
 
 
 def _load_config() -> dict:
@@ -76,8 +30,7 @@ def _load_config() -> dict:
     return json.loads(config_path.read_text())
 
 
-def do_list() -> None:
-    config = _load_config()
+def _fetch_matching(config: dict) -> list[Slot]:
     rules = config.get("rules", [])
 
     print("Obtaining JWT...")
@@ -89,9 +42,91 @@ def do_list() -> None:
 
     matching = [s for s in all_slots if matches_rules(s, rules)]
     print(f"  {len(matching)} match configured rules")
+    return matching
+
+
+def _compute_and_sync(config: dict, matching: list[Slot]) -> list[SlotChange]:
+    now = datetime.now(timezone.utc)
+    date_from = now.strftime("%Y-%m-%d")
+    date_to = (now + timedelta(days=config["check_days"])).strftime("%Y-%m-%d")
+
+    db = SlotDB(DB_PATH)
+    try:
+        stored = db.get_slots_in_range(date_from, date_to)
+        changes = compute_changes(stored, matching)
+        db.sync(matching, changes)
+        return changes
+    finally:
+        db.close()
+
+
+def _send_telegram(config: dict, message: str) -> None:
+    telegram = config["telegram"]
+    if not telegram.get("bot_token") or not telegram.get("chat_id"):
+        print("\n⚠️  Telegram not configured — set bot_token and chat_id in config.json")
+        sys.exit(1)
+
+    print("Sending Telegram notification...")
+    try:
+        send_telegram(message, telegram["bot_token"], telegram["chat_id"])
+        print("Done!")
+    except Exception as e:
+        print(f"⚠️  Telegram send failed: {e}")
+
+
+def do_list() -> None:
+    config = _load_config()
+    matching = _fetch_matching(config)
+    print("\n🏸 Available Badminton Slots:")
+    print(format_slot_list(matching))
+
+
+def do_check() -> None:
+    config = _load_config()
+    matching = _fetch_matching(config)
+    changes = _compute_and_sync(config, matching)
+
+    new_count = sum(1 for c in changes if c.change_type == "new")
+    gone_count = sum(1 for c in changes if c.change_type == "gone")
+    bookable_count = sum(1 for c in changes if c.change_type == "bookable")
+    print(f"  Changes: {new_count} new, {gone_count} gone, {bookable_count} now bookable")
+
+    print("\n🏸 Badminton Slot Changes:")
+    print(format_console(changes))
+
+
+def do_notify_current() -> None:
+    config = _load_config()
+    matching = _fetch_matching(config)
 
     print("\n🏸 Available Badminton Slots:")
     print(format_slot_list(matching))
+
+    message = format_slot_list_telegram(matching)
+    if not message:
+        print("\nNo slots to send.")
+        return
+    _send_telegram(config, message)
+
+
+def do_notify_changes() -> None:
+    config = _load_config()
+    matching = _fetch_matching(config)
+    changes = _compute_and_sync(config, matching)
+
+    new_count = sum(1 for c in changes if c.change_type == "new")
+    gone_count = sum(1 for c in changes if c.change_type == "gone")
+    bookable_count = sum(1 for c in changes if c.change_type == "bookable")
+    print(f"  Changes: {new_count} new, {gone_count} gone, {bookable_count} now bookable")
+
+    print("\n🏸 Badminton Slot Changes:")
+    print(format_console(changes))
+
+    message = format_telegram(changes)
+    if not message:
+        print("\nNo changes to send.")
+        return
+    _send_telegram(config, message)
 
 
 def do_cleanup(days: int) -> None:
@@ -107,8 +142,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Badminton slot notifier")
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("check", help="Check for slot changes (default)")
     sub.add_parser("list", help="Fetch and display current available slots")
+    sub.add_parser("check", help="Check for slot changes and update DB (default)")
+
+    notify_p = sub.add_parser("notify", help="Send notifications to Telegram")
+    notify_sub = notify_p.add_subparsers(dest="notify_command")
+    notify_sub.add_parser("current", help="Post current available slots to Telegram")
+    notify_sub.add_parser("changes", help="Post slot changes to Telegram")
 
     cleanup_p = sub.add_parser("cleanup", help="Remove old slots from database")
     cleanup_p.add_argument("days", type=int, help="Remove slots older than N days")
@@ -117,6 +157,13 @@ def main() -> None:
 
     if args.command == "list":
         do_list()
+    elif args.command == "notify":
+        if args.notify_command == "current":
+            do_notify_current()
+        elif args.notify_command == "changes":
+            do_notify_changes()
+        else:
+            notify_p.print_help()
     elif args.command == "cleanup":
         do_cleanup(args.days)
     else:

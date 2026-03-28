@@ -58,6 +58,37 @@ def format_slot_list(slots: list[Slot]) -> str:
     return "\n".join(lines)
 
 
+def format_slot_list_telegram(slots: list[Slot]) -> str:
+    if not slots:
+        return ""
+
+    grouped: dict[str, list[Slot]] = {}
+    for slot in slots:
+        local_start = to_local(parse_utc(slot.start_time))
+        local_date = local_start.strftime("%Y-%m-%d")
+        key = f"{local_date}|{slot.site_name}"
+        grouped.setdefault(key, []).append(slot)
+
+    lines = ["🏸 *Available Badminton Slots\\!*\n"]
+    for key in sorted(grouped.keys()):
+        date_str, site_name = key.split("|", 1)
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        day_label = dt.strftime("%A %d %b")
+        lines.append(f"📅 *{_escape_markdown(day_label)} — {_escape_markdown(site_name)}*")
+        for s in sorted(grouped[key], key=lambda x: x.start_time):
+            start_local = to_local(parse_utc(s.start_time))
+            end_local = to_local(parse_utc(s.end_time))
+            start = start_local.strftime("%H:%M")
+            end = end_local.strftime("%H:%M")
+            activity = _escape_markdown(s.activity_name)
+            location = _escape_markdown(s.location)
+            suffix = _bookable_suffix(s, escape_md=True)
+            lines.append(f"  • {start}–{end} \\| {activity} \\| {location}{suffix}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def format_change_line(change: SlotChange, *, escape_md: bool = False) -> str:
     s = change.slot
     start_local = to_local(parse_utc(s.start_time))
