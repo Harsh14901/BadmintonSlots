@@ -9,6 +9,12 @@ dependencies = [
     "playwright>=1.58.0",
 ]
 
+[project.scripts]
+badminton-notifier = "src.main:main"
+
+[tool.uv]
+package = true
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
