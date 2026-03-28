@@ -103,9 +103,12 @@ class SlotDB:
                         (now, s.site_id, s.location, s.start_time),
                     )
 
-    def cleanup(self, days: int) -> int:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
-        cursor = self._conn.execute("DELETE FROM slots WHERE date < ?", (cutoff,))
+    def cleanup(self, *, days: int | None = None) -> int:
+        if days is None:
+            cursor = self._conn.execute("DELETE FROM slots")
+        else:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+            cursor = self._conn.execute("DELETE FROM slots WHERE date < ?", (cutoff,))
         self._conn.commit()
         return cursor.rowcount
 
