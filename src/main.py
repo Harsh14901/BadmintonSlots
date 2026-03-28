@@ -1,51 +1,23 @@
+import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.auth import get_jwt
-from src.api import Slot, fetch_available_slots
+from src.api import fetch_available_slots
+from src.db import SlotDB
+from src.diff import compute_changes
 from src.filters import matches_rules
-from src.dedup import DedupStore
-from src.notify import format_slot_message, send_telegram
-from src.tz import parse_utc, to_local
+from src.notify import format_console, format_telegram, send_telegram
 
 
-def print_slots(slots: list[Slot]) -> None:
-    if not slots:
-        print("\n  No matching slots found.")
-        return
-
-    now = datetime.now(timezone.utc)
-    grouped: dict[str, list[Slot]] = {}
-    for slot in slots:
-        local_start = to_local(parse_utc(slot.start_time))
-        local_date = local_start.strftime("%Y-%m-%d")
-        key = f"{local_date}|{slot.site_name}"
-        grouped.setdefault(key, []).append(slot)
-
-    for key in sorted(grouped.keys()):
-        date_str, site_name = key.split("|", 1)
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
-        day_label = dt.strftime("%A %d %b")
-        print(f"\n  📅 {day_label} — {site_name}")
-        print(f"  {'─' * 60}")
-        for s in sorted(grouped[key], key=lambda x: x.start_time):
-            start_local = to_local(parse_utc(s.start_time))
-            end_local = to_local(parse_utc(s.end_time))
-            start = start_local.strftime("%H:%M")
-            end = end_local.strftime("%H:%M")
-            line = f"    {start}–{end}  {s.activity_name:<20s} {s.location}"
-            if s.bookable_from:
-                bookable_dt = parse_utc(s.bookable_from)
-                if bookable_dt > now:
-                    bookable_local = to_local(bookable_dt)
-                    line += f"  ⏳ bookable from {bookable_local.strftime('%a %d %b %H:%M')}"
-            print(line)
+PROJECT_ROOT = Path(__file__).parent.parent
+DB_PATH = PROJECT_ROOT / "slots.db"
 
 
-def main() -> None:
-    config_path = Path(__file__).parent.parent / "config.json"
+def do_check() -> None:
+    config_path = PROJECT_ROOT / "config.json"
     if not config_path.exists():
         print(f"Config not found: {config_path}")
         sys.exit(1)
@@ -64,28 +36,67 @@ def main() -> None:
     matching = [s for s in all_slots if matches_rules(s, rules)]
     print(f"  {len(matching)} match configured rules")
 
-    dedup_path = Path(__file__).parent.parent / "notified.json"
-    store = DedupStore(dedup_path)
-    store.cleanup()
+    now = datetime.now(timezone.utc)
+    date_from = now.strftime("%Y-%m-%d")
+    date_to = (now + timedelta(days=config["check_days"])).strftime("%Y-%m-%d")
 
-    new_slots = [s for s in matching if not store.is_seen(s)]
-    print(f"  {len(new_slots)} are new (not previously notified)")
+    db = SlotDB(DB_PATH)
+    try:
+        stored = db.get_slots_in_range(date_from, date_to)
+        changes = compute_changes(stored, matching)
 
-    print("\n🏸 Available Badminton Slots:")
-    print_slots(new_slots)
+        new_count = sum(1 for c in changes if c.change_type == "new")
+        gone_count = sum(1 for c in changes if c.change_type == "gone")
+        bookable_count = sum(1 for c in changes if c.change_type == "bookable")
+        print(f"  Changes: {new_count} new, {gone_count} gone, {bookable_count} now bookable")
 
-    if not new_slots:
-        return
+        db.sync(matching, changes)
 
-    if not telegram.get("bot_token"):
-        print("\n⚠️  Telegram bot_token not configured — skipping notification")
-        return
+        print("\n🏸 Badminton Slot Changes:")
+        print(format_console(changes))
 
-    message = format_slot_message(new_slots)
-    print("\nSending Telegram notification...")
-    send_telegram(message, telegram["bot_token"], telegram["chat_id"])
-    store.mark_seen(new_slots)
-    print("Done!")
+        if not changes:
+            return
+
+        if not telegram.get("bot_token") or not telegram.get("chat_id"):
+            print("\n⚠️  Telegram not configured — skipping notification")
+            return
+
+        message = format_telegram(changes)
+        print("\nSending Telegram notification...")
+        try:
+            send_telegram(message, telegram["bot_token"], telegram["chat_id"])
+            print("Done!")
+        except Exception as e:
+            print(f"⚠️  Telegram send failed: {e}")
+    finally:
+        db.close()
+
+
+def do_cleanup(days: int) -> None:
+    db = SlotDB(DB_PATH)
+    try:
+        removed = db.cleanup(days)
+        print(f"Removed {removed} slots older than {days} days.")
+    finally:
+        db.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Badminton slot notifier")
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("check", help="Check for slot changes (default)")
+
+    cleanup_p = sub.add_parser("cleanup", help="Remove old slots from database")
+    cleanup_p.add_argument("days", type=int, help="Remove slots older than N days")
+
+    args = parser.parse_args()
+
+    if args.command == "cleanup":
+        do_cleanup(args.days)
+    else:
+        do_check()
 
 
 if __name__ == "__main__":
