@@ -3,8 +3,7 @@ from dataclasses import dataclass
 
 import httpx
 
-
-BASE_URL = "https://towerhamletscouncil.gladstonego.cloud"
+from src.constants import BASE_URL
 
 
 @dataclass(frozen=True)

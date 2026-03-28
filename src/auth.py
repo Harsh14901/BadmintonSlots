@@ -1,7 +1,6 @@
 from playwright.sync_api import sync_playwright
 
-
-BASE_URL = "https://towerhamletscouncil.gladstonego.cloud"
+from src.constants import BASE_URL
 
 
 def get_jwt() -> str:

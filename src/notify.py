@@ -5,11 +5,17 @@ import httpx
 from src.api import Slot
 
 
+def _escape_markdown(text: str) -> str:
+    for char in r"\_*[]()~`>#+-=|{}.!":
+        text = text.replace(char, f"\\{char}")
+    return text
+
+
 def format_slot_message(slots: list[Slot]) -> str:
     if not slots:
         return ""
 
-    lines = ["🏸 *Badminton Slots Available!*\n"]
+    lines = ["🏸 *Badminton Slots Available\\!*\n"]
     grouped: dict[str, list[Slot]] = {}
     for slot in slots:
         key = f"{slot.date}|{slot.site_name}"
@@ -20,11 +26,15 @@ def format_slot_message(slots: list[Slot]) -> str:
         day_slots = grouped[key]
         dt = datetime.strptime(date_str, "%Y-%m-%d")
         day_label = dt.strftime("%A %d %b")
-        lines.append(f"📅 *{day_label} — {site_name}*")
+        lines.append(f"📅 *{_escape_markdown(day_label)} — {_escape_markdown(site_name)}*")
         for s in sorted(day_slots, key=lambda x: x.start_time):
-            start = s.start_time[11:16]
-            end = s.end_time[11:16]
-            lines.append(f"  • {start}–{end} | {s.activity_name} | {s.location}")
+            start_dt = datetime.fromisoformat(s.start_time.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(s.end_time.replace("Z", "+00:00"))
+            start = start_dt.strftime("%H:%M")
+            end = end_dt.strftime("%H:%M")
+            activity = _escape_markdown(s.activity_name)
+            location = _escape_markdown(s.location)
+            lines.append(f"  • {start}–{end} \\| {activity} \\| {location}")
         lines.append("")
 
     return "\n".join(lines)
@@ -42,7 +52,7 @@ def send_telegram(message: str, bot_token: str, chat_id: str) -> None:
             json={
                 "chat_id": chat_id,
                 "text": chunk,
-                "parse_mode": "Markdown",
+                "parse_mode": "MarkdownV2",
             },
             timeout=10,
         )

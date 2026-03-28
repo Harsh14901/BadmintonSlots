@@ -1,4 +1,5 @@
 notified.json
+config.json
 .playwright-cli/
 __pycache__/
 .venv/
