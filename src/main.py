@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -60,15 +61,16 @@ def _compute_and_sync(config: dict, matching: list[Slot], *, dry_run: bool = Fal
         db.close()
 
 
-def _send_telegram(config: dict, message: str) -> None:
-    telegram = config["telegram"]
-    if not telegram.get("bot_token") or not telegram.get("chat_id"):
-        print("\n⚠️  Telegram not configured — set bot_token and chat_id in config.json")
+def _send_telegram(message: str) -> None:
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        print("\n⚠️  Telegram not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars")
         sys.exit(1)
 
     print("Sending Telegram notification...")
     try:
-        send_telegram(message, telegram["bot_token"], telegram["chat_id"])
+        send_telegram(message, bot_token, chat_id)
         print("Done!")
     except Exception as e:
         print(f"⚠️  Telegram send failed: {e}")
@@ -106,7 +108,7 @@ def do_notify_current() -> None:
     if not message:
         print("\nNo slots to send.")
         return
-    _send_telegram(config, message)
+    _send_telegram(message)
 
 
 def do_notify_changes() -> None:
@@ -126,7 +128,7 @@ def do_notify_changes() -> None:
     if not message:
         print("\nNo changes to send.")
         return
-    _send_telegram(config, message)
+    _send_telegram(message)
 
 
 def do_cleanup(*, days: int | None = None) -> None:

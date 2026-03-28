@@ -1,5 +1,5 @@
 slots.db
-config.json
+.env
 .playwright-cli/
 __pycache__/
 .venv/
