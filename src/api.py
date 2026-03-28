@@ -15,6 +15,7 @@ class Slot:
     date: str
     start_time: str
     end_time: str
+    bookable_from: str
 
 
 def fetch_available_slots(jwt: str, config: dict) -> list[Slot]:
@@ -58,5 +59,6 @@ def fetch_available_slots(jwt: str, config: dict) -> list[Slot]:
                     date=activity["date"],
                     start_time=slot["startTime"],
                     end_time=slot["endTime"],
+                    bookable_from=slot.get("bookableFrom", ""),
                 ))
     return slots

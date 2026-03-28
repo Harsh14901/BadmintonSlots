@@ -11,6 +11,7 @@ def _slot(start: str = "2026-03-29T10:00:00Z") -> Slot:
         date="2026-03-29",
         start_time=start,
         end_time="2026-03-29T10:39:59Z",
+        bookable_from="",
     )
 
 
