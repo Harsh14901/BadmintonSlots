@@ -4,8 +4,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from src.api import Slot, fetch_available_slots
-from src.auth import get_jwt
+from src.api import Slot, fetch_available_slots, get_jwt
 from src.db import SlotDB
 from src.diff import SlotChange, compute_changes
 from src.filters import matches_rules
@@ -130,11 +129,14 @@ def do_notify_changes() -> None:
     _send_telegram(config, message)
 
 
-def do_cleanup(days: int) -> None:
+def do_cleanup(*, days: int | None = None) -> None:
     db = SlotDB(DB_PATH)
     try:
-        removed = db.cleanup(days)
-        print(f"Removed {removed} slots older than {days} days.")
+        removed = db.cleanup(days=days)
+        if days is None:
+            print(f"Removed all {removed} slots.")
+        else:
+            print(f"Removed {removed} slots older than {days} days.")
     finally:
         db.close()
 
@@ -153,7 +155,9 @@ def main() -> None:
     notify_sub.add_parser("changes", help="Post slot changes to Telegram")
 
     cleanup_p = sub.add_parser("cleanup", help="Remove old slots from database")
-    cleanup_p.add_argument("days", type=int, help="Remove slots older than N days")
+    cleanup_g = cleanup_p.add_mutually_exclusive_group(required=True)
+    cleanup_g.add_argument("days", type=int, nargs="?", default=None, help="Remove slots older than N days")
+    cleanup_g.add_argument("--all", action="store_true", help="Remove all slots")
 
     args = parser.parse_args()
 
@@ -169,7 +173,7 @@ def main() -> None:
         else:
             notify_p.print_help()
     elif args.command == "cleanup":
-        do_cleanup(args.days)
+        do_cleanup(days=None if args.all else args.days)
     else:
         do_check()
 

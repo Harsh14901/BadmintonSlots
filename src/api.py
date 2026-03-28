@@ -5,6 +5,19 @@ import httpx
 
 from src.constants import BASE_URL
 
+ANON_AUTH_URL = f"{BASE_URL}/api/samlauthentication/anonymous"
+
+
+def get_jwt() -> str:
+    with httpx.Client(follow_redirects=True) as client:
+        resp = client.get(ANON_AUTH_URL, timeout=15)
+        resp.raise_for_status()
+
+        jwt = resp.cookies.get("Jwt")
+        if not jwt:
+            raise RuntimeError("Failed to obtain JWT cookie")
+        return jwt
+
 
 @dataclass(frozen=True)
 class Slot:
