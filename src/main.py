@@ -45,7 +45,7 @@ def _fetch_matching(config: dict) -> list[Slot]:
     return matching
 
 
-def _compute_and_sync(config: dict, matching: list[Slot]) -> list[SlotChange]:
+def _compute_and_sync(config: dict, matching: list[Slot], *, dry_run: bool = False) -> list[SlotChange]:
     now = datetime.now(timezone.utc)
     date_from = now.strftime("%Y-%m-%d")
     date_to = (now + timedelta(days=config["check_days"])).strftime("%Y-%m-%d")
@@ -54,7 +54,8 @@ def _compute_and_sync(config: dict, matching: list[Slot]) -> list[SlotChange]:
     try:
         stored = db.get_slots_in_range(date_from, date_to)
         changes = compute_changes(stored, matching)
-        db.sync(matching, changes)
+        if not dry_run:
+            db.sync(matching, changes)
         return changes
     finally:
         db.close()
@@ -81,10 +82,10 @@ def do_list() -> None:
     print(format_slot_list(matching))
 
 
-def do_check() -> None:
+def do_check(*, dry_run: bool = False) -> None:
     config = _load_config()
     matching = _fetch_matching(config)
-    changes = _compute_and_sync(config, matching)
+    changes = _compute_and_sync(config, matching, dry_run=dry_run)
 
     new_count = sum(1 for c in changes if c.change_type == "new")
     gone_count = sum(1 for c in changes if c.change_type == "gone")
@@ -143,7 +144,8 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("list", help="Fetch and display current available slots")
-    sub.add_parser("check", help="Check for slot changes and update DB (default)")
+    check_p = sub.add_parser("check", help="Check for slot changes and update DB (default)")
+    check_p.add_argument("--dry-run", action="store_true", help="Show changes without updating the database")
 
     notify_p = sub.add_parser("notify", help="Send notifications to Telegram")
     notify_sub = notify_p.add_subparsers(dest="notify_command")
@@ -157,6 +159,8 @@ def main() -> None:
 
     if args.command == "list":
         do_list()
+    elif args.command == "check":
+        do_check(dry_run=args.dry_run)
     elif args.command == "notify":
         if args.notify_command == "current":
             do_notify_current()
