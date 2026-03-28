@@ -1,0 +1,45 @@
+name: Backup slots.db
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'  # every Sunday at 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: slots.db
+          key: slots-db-will-not-match
+          restore-keys: slots-db-
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Cleanup old slots
+        run: |
+          if [ -f slots.db ]; then
+            uv run main.py cleanup 7
+          fi
+
+      - name: Commit slots.db if it exists
+        run: |
+          if [ ! -f slots.db ]; then
+            echo "No slots.db found in cache, skipping"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f slots.db
+          if git diff --cached --quiet; then
+            echo "No changes to slots.db, skipping"
+          else
+            git commit -m "chore: backup slots.db"
+            git push
+          fi
